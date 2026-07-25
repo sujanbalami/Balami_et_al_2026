@@ -1,0 +1,2171 @@
+---
+title: "Slower recovery of soil fungal communities: insights from >20 years of tropical forest restoration in rubber monocultures"
+format: html
+editor: visual
+---
+
+# Load required packages
+
+```{r message=FALSE, warning=FALSE}
+library(patchwork); library(iCAMP); library(gridExtra); library(emmeans); library(tidyr); library(multcomp); library(TH.data); library(MASS); library(survival); library(mvtnorm); library(lmerTest); library(lme4); library(Matrix); library(combinat); library(ggpubr); library(ggplot2); library(dplyr); library(spdep); library(sf); library(spData); library(picante); library(nlme); library(vegan); library(permute); library(ape); library(gridExtra); library(tidyverse); library(knitr); library(vegan)
+
+set.seed(1234)
+```
+
+# Import data
+
+```{r}
+
+# Raw data
+OTU_table_total_fungi_unrarefied <- read.csv("data/total_fungi_unrarefied.csv", row.names = 1, header = TRUE)
+OTU_table_AM_fungi_unrarefied <- read.csv("data/am_fungi_unrarefied.csv", row.names = 1, header = TRUE)
+
+# Transform raw data to relative abundance
+OTU_table_total_fungi_t <- t(OTU_table_total_fungi_unrarefied)
+OTU_table_AM_fungi_t <- t(OTU_table_AM_fungi_unrarefied)
+
+# Rarefied data
+OTU_table_total_fungi <- read.csv("data/total_fungi_rarefied.csv", row.names = 1, header = TRUE)
+OTU_table_AM_fungi <- read.csv("data/am_fungi_rarefied.csv", row.names = 1, header = TRUE)
+
+# Transform rarefied data to relative abundance
+total_rel_abundance <- sweep(OTU_table_total_fungi,2,colSums(OTU_table_total_fungi),FUN = "/")
+AM_rel_abundance_AM <- sweep(OTU_table_AM_fungi,2,colSums(OTU_table_AM_fungi),FUN = "/")
+
+# Import phylogenetic tree
+total_tree <- read.tree("data/total_fungi_tree.nwk")
+AM_tree <- read.tree("data/am_fungi_tree.nwk")
+
+# Import environmental variable
+env_var <- read.csv("data/env.csv", row.names = 1, header = TRUE)
+location <- read.csv("data/location.csv", row.names = 1, header = TRUE)
+```
+
+# Data overview
+
+## Rarefaction curves
+
+```{r}
+par(mfrow = c(1, 2),
+    mar = c(4.2, 4.2, 2, 1),
+    oma = c(1, 1, 1, 1),
+    mgp = c(1.8, 0.6, 0),
+    cex.lab = 0.8,
+    cex.axis = 0.7,
+    cex.main = 0.8,
+    font.main = 1)
+
+forest_colors <- c(RM = "#F8766D", NR = "#619CFF", RP = "cyan3", MF = "#00BA38")
+curve_colors_total <- forest_colors[rep(c("RM", "NR", "RP", "MF"), each = 8)]
+curve_colors_AM    <- forest_colors[rep(c("RM", "NR", "RP", "MF"), each = 8)]
+
+rarecurve(OTU_table_total_fungi_t, step = 500, col = curve_colors_total,
+          cex = 0.3, label = FALSE,
+          xlab = "Sequencing depth",
+          ylab = "Number of total fungal OTUs",
+          main = "Total fungi")
+legend(55000, 360, legend = names(forest_colors), col = forest_colors,
+       lwd = 1, cex = 0.5, bty = "n")
+
+rarecurve(OTU_table_AM_fungi_t, step = 500, col = curve_colors_AM,
+          cex = 0.3, label = FALSE,
+          xlab = "Sequencing depth",
+          ylab = "Number of AM fungal VTs",
+          main = "AM fungi")
+legend(40000, 18, legend = names(forest_colors), col = forest_colors,
+       lwd = 1, cex = 0.5, bty = "n")
+```
+
+## Relative abundance total fungi
+
+```{r}
+Relative_abundance_phylum <- read.csv("data/total_fungi_phylum.csv",header = TRUE)
+Relative_abundance_phylum <- Relative_abundance_phylum %>% mutate(season=factor(season, levels=c("Wet","Dry")), forest=factor(forest, levels=c("RM","NR","RP","MF")), phylum=factor(phylum, levels=c("Unidentified","Ascomycota","Basidiomycota","Mortierellomycota","Mucoromycota","Basal lineage")))
+manual_colors_functional <- c("Unidentified"="grey50","Ascomycota"="#006837","Basidiomycota"="#1a9850","Mortierellomycota"="#66bd63","Mucoromycota"="#a6d96a","Basal lineage"="#d9f0a3")
+phylum_abundance <- Relative_abundance_phylum %>%group_by(phylum) %>%summarise(total_abundance = sum(abundance, na.rm = TRUE),.groups = "drop")
+Total_fungi_family_pie_chart <- ggplot(phylum_abundance, aes(x="", y=total_abundance, fill=phylum)) + geom_bar(stat="identity", linewidth=1, alpha=0.6) + coord_polar(theta="y") + scale_fill_manual(values=manual_colors_functional) + theme_void() + labs(title="Total fungi", fill="Phylum") + theme(plot.background=element_rect(fill="white", color=NA, size=0.3), panel.background=element_rect(fill="white"), plot.title=element_text(hjust=0.5, size=10), legend.position="right", legend.title=element_text(size=9), legend.text=element_text(size=8), legend.key.size=unit(0.3,"cm"), aspect.ratio=1)
+Total_fungi_family_pie_chart
+```
+
+## Relative abundance am fungi
+
+```{r}
+Relative_abundance_AM_family <- read.csv("data/am_fungi_family.csv", header = TRUE)
+Relative_abundance_AM_family$season<-as.factor(Relative_abundance_AM_family$season)
+Relative_abundance_AM_family$forest<-as.factor(Relative_abundance_AM_family$forest)
+Relative_abundance_AM_family$family<-as.factor(Relative_abundance_AM_family$family)
+Relative_abundance_AM_family$family <- factor(Relative_abundance_AM_family$family, levels = c("Glomeraceae","Acaulosporaceae","Claroideoglomeraceae","Archaeosporaceae","Gigasporaceae","Paraglomeraceae","Diversisporaceae"))
+Relative_abundance_AM_family$forest<-factor(Relative_abundance_AM_family$forest,levels=c("RM", "NF", "AF", "SF"))
+Relative_abundance_AM_family$season<-factor(Relative_abundance_AM_family$season,levels=c("Wet", "Dry"))
+Relative_abundance_AM_family_scaled <- Relative_abundance_AM_family %>% group_by(forest, season) %>% mutate(Relative_abundance_percent = abundance / sum(abundance) * 100)
+manual_colors_family <- c("Glomeraceae"="#0B1D51","Acaulosporaceae"="#1034A6","Claroideoglomeraceae"="#0066CC","Archaeosporaceae"="#1E90FF","Gigasporaceae"="#3399FF","Paraglomeraceae"="#66B2FF","Diversisporaceae"="#99CCFF","Others"="#CFE7FF")
+AM_fungi_family_pie_chart <- ggplot(Relative_abundance_AM_family_scaled, aes(x="", y=Relative_abundance_percent, fill=family)) + geom_bar(stat="identity", linewidth=1, alpha=0.6) + coord_polar(theta="y") + scale_fill_manual(values=manual_colors_family) + labs(title="AM fungi", fill="Family") + theme_void() + theme(plot.background=element_rect(fill="white", color=NA, size=0.3), panel.background=element_rect(fill="white"), plot.title=element_text(hjust=0.5, size=10), legend.position="right", legend.title=element_text(size=8.9), legend.text=element_text(size=7.9), legend.key.size=unit(0.3,"cm"), aspect.ratio=1, plot.margin=margin(10,10,10,10,unit="pt"))
+AM_fungi_family_pie_chart
+```
+
+# Alpha diversity
+
+## Total fungi
+
+```{r}
+richness_total <- colSums(total_rel_abundance > 0)
+shannon_total <- diversity(t(total_rel_abundance), index = "shannon")
+OTU_pa_total <- t(total_rel_abundance > 0)
+PD_total <- pd(OTU_pa_total, total_tree, include.root = FALSE)
+alpha_total <- data.frame(Plot_ID=rownames(PD_total), Richness=richness_total[rownames(PD_total)], Shannon=shannon_total[rownames(PD_total)], PD=PD_total$PD)
+alpha_total <- cbind(alpha_total, env_var, location)
+alpha_total$Plot_ID <- as.character(alpha_total$Plot_ID)
+alpha_total$Plot_ID <- sub("^XS", "SB", alpha_total$Plot_ID)
+alpha_total$restoration <- factor(ifelse(alpha_total$forest_types=="RM","Monoculture", ifelse(alpha_total$forest_types %in% c("NR","RP"),"Restored","Reference")), levels=c("Monoculture","Restored","Reference"))
+```
+
+## AM fungi
+
+```{r}
+richness_AM <- colSums(AM_rel_abundance_AM > 0)
+shannon_AM <- diversity(t(AM_rel_abundance_AM), index = "shannon")
+OTU_pa_AM <- t(AM_rel_abundance_AM > 0)
+PD_AM <- pd(OTU_pa_AM, AM_tree, include.root = FALSE)
+alpha_AM <- data.frame(Plot_ID=rownames(PD_AM), Richness=richness_AM[rownames(PD_AM)], Shannon=shannon_AM[rownames(PD_AM)], PD=PD_AM$PD)
+alpha_AM <- cbind(alpha_AM, env_var, location)
+alpha_AM$Plot_ID <- as.character(alpha_AM$Plot_ID)
+alpha_AM$Plot_ID <- sub("^XS", "SB", alpha_AM$Plot_ID)
+alpha_AM$restoration <- factor(ifelse(alpha_AM$forest_types=="RM","Monoculture", ifelse(alpha_AM$forest_types %in% c("NR","RP"),"Restored","Reference")), levels=c("Monoculture","Restored","Reference"))
+```
+
+## Figure 1
+
+```{r}
+alpha_long <- alpha_total %>% pivot_longer(cols = c(Richness, Shannon, PD), names_to = "Metric", values_to = "Value")
+alpha_long$forest_types <- factor (alpha_long$forest_types, levels = c("RM", "NR", "RP", "MF"))
+alpha_long$Metric <- factor(alpha_long$Metric, levels = c("Richness", "Shannon", "PD"), labels = c("Observed richness", "Shannon diversity", "Phylogenetic diversity"))
+common_colors <- c("RM"= "cyan4", "NR" = "chartreuse3", "RP"= "#7db53eff", "MF" = "forestgreen")
+common_shapes <- c("Dry" = 16, "Wet" = 17)
+Figure_1_1 <- ggplot(alpha_long, aes(x = forest_types, y = Value, fill = forest_types)) + geom_boxplot(width = 0.5, outlier.shape = NA) + geom_jitter(aes(shape = season), width = 0.05, size = 1.5, alpha = 0.7) + geom_vline(xintercept = 1.6, color = "grey50", linetype = "dashed") + geom_vline(xintercept = 3.5, color = "grey50", linetype = "dashed") + scale_fill_manual(values = common_colors) + facet_wrap(~ Metric, scales = "free_y") + theme_pubr(border = TRUE, legend = "none") + labs(x = "Forest type", y = "Alpha diversity (Total fungi)", shape = "Season") + theme(strip.background = element_rect(fill = "grey20"), strip.text = element_text(size = 12, face = "plain", color = "white")) + annotate("text", x = 1, y = Inf, label = "Monoculture", vjust = 1.8, size = 3.2, fontface = "plain") + annotate("text", x = 2.5, y = Inf, label = "Restored forests", vjust = 1.8, size = 3.2, fontface = "plain") + annotate("text", x = 4, y = Inf, label = "Rainforest", vjust = 1.8, size = 3.2, fontface = "plain") + scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))
+Figure_1_1
+```
+
+```{r}
+alpha_AM_long <- alpha_AM %>% pivot_longer(cols = c(Richness, Shannon, PD), names_to = "Metric", values_to = "Value")
+alpha_AM_long$forest_types <- factor(alpha_AM_long$forest_types, levels = c("RM", "NR", "RP", "MF"))
+alpha_AM_long$Metric <- factor(alpha_AM_long$Metric, levels = c("Richness", "Shannon", "PD"), labels = c("Observed richness", "Shannon diversity", "Phylogenetic diversity"))
+Figure_1_2 <- ggplot(alpha_AM_long, aes(x = forest_types, y = Value, fill = forest_types)) + geom_boxplot(width = 0.5, outlier.shape = NA) + geom_jitter(aes(shape = season), width = 0.05, size = 1.5, alpha = 0.7) + geom_vline(xintercept = 1.6, color = "grey50", linetype = "dashed") + geom_vline(xintercept = 3.5, color = "grey50", linetype = "dashed") + scale_fill_manual(values = common_colors) + facet_wrap(~ Metric, scales = "free_y") + theme_pubr(border = TRUE, legend = "none") + labs(x = "Forest type", y = "Alpha diversity (AM fungi)", shape = "Season") + theme(strip.background = element_rect(fill = "grey20"), strip.text = element_text(size = 12, face = "plain", color = "white")) + annotate("text", x = 1, y = Inf, label = "Monoculture", vjust = 1.8, size = 3.2, fontface = "plain") + annotate("text", x = 2.5, y = Inf, label = "Restored forests", vjust = 1.8, size = 3.2, fontface = "plain") + annotate("text", x = 4, y = Inf, label = "Rainforest", vjust = 1.8, size = 3.2, fontface = "plain") + scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))
+Figure_1_2
+```
+
+## Significance test
+
+### Test spatial autocorrelation
+
+```{r}
+set.seed(123) 
+
+location_jittered <- location %>% 
+  mutate(latitude_jitter  = jitter(Latitude,  amount = 0.00001),longitude_jitter = jitter(Longitude, amount = 0.00001))
+
+# Spatial weights (based ONLY on coordinates)
+coords <- cbind(location_jittered$longitude_jitter,location_jittered$latitude_jitter)
+nb <- knn2nb(knearneigh(coords, k = 8))
+lw <- nb2listw(nb, style = "W")
+
+run_moran_test <- function(formula, data, listw) {
+  mod <- lm(formula, data = data)
+  res <- resid(mod)
+  moran.test(res, listw)
+}
+
+metrics <- list(Richness = Richness ~ forest_types * season,Shannon = Shannon ~ forest_types * season, PD = PD ~ forest_types * season)
+alpha_total_spatial <- alpha_total[,c("Richness", "Shannon", "PD", "season", "forest_types")]
+moran_results_total <- lapply(names(metrics), function(name) {
+  cat("\n### Moran's I – Total fungi:", name, "###\n")
+  result <- run_moran_test(metrics[[name]], alpha_total_spatial, lw)
+  print(result)
+  result
+})
+
+names(moran_results_total) <- names(metrics)
+alpha_AM_spatial <- alpha_AM[, c("Richness", "Shannon", "PD", "season", "forest_types")]
+moran_results_AM <- lapply(names(metrics), function(name) {
+  cat("\n### Moran's I – AM fungi:", name, "###\n")
+  result <- run_moran_test(metrics[[name]], alpha_AM_spatial, lw)
+  print(result)
+  result
+})
+
+names(moran_results_AM) <- names(metrics)
+extract_moran <- function(moran_list) {
+  data.frame(
+    Metric = names(moran_list),
+    Moran_I = sapply(moran_list, function(x) x$estimate[1]),
+    Expected_I = sapply(moran_list, function(x) x$estimate[2]),
+    Variance = sapply(moran_list, function(x) x$estimate[3]),
+    Z_score = sapply(moran_list, function(x) x$statistic),
+    P_value = sapply(moran_list, function(x) x$p.value),
+    row.names = NULL
+  )
+}
+
+moran_total_table <- extract_moran(moran_results_total)
+kable(moran_total_table, digits = 4, caption = "Moran’s I test for spatial autocorrelation in residuals of total fungal diversity models")
+moran_AM_table <- extract_moran(moran_results_AM)
+kable(moran_AM_table, digits = 4, caption = "Moran’s I test for spatial autocorrelation in residuals of AM fungal diversity models")
+```
+
+### Effect of restoration in alpha diversity
+
+#### Richness
+
+##### Total fungi
+
+Does restoration improve richness?
+
+```{r}
+alpha_total$restoration <- relevel(alpha_total$restoration, ref = "Monoculture")
+shapiro.test(alpha_total$Richness)
+mod_restoration <- lmer(Richness ~ restoration + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Does restored forest level rainforest condition?
+
+```{r}
+alpha_total$restoration <- relevel(alpha_total$restoration, ref = "Reference")
+mod_restoration <- lmer(Richness ~ restoration + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Are restoration strategies different?
+
+```{r}
+alpha_total$forest_types <- factor(alpha_total$forest_types)
+alpha_total$forest_types <- relevel(alpha_total$forest_types, ref = "NR")
+mod_restoration <- lmer(Richness ~ forest_types + season + (1 | Plot_ID),data = alpha_total)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+##### AM fungi
+
+Does restoration improve richness?
+
+```{r}
+alpha_AM$restoration <- relevel(alpha_AM$restoration, ref = "Monoculture")
+shapiro.test(alpha_AM$Richness)
+mod_restoration <- lmer(Richness ~ restoration + season + (1 | Plot_ID),data = alpha_AM)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Does restored forest level rainforest condition?
+
+```{r}
+alpha_AM$restoration <- relevel(alpha_AM$restoration, ref = "Reference")
+mod_restoration <- lmer(Richness ~ restoration + season + (1 | Plot_ID),data = alpha_AM)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Are restoration strategies different?
+
+```{r}
+alpha_AM$forest_types <- factor(alpha_AM$forest_types)
+alpha_AM$forest_types <- relevel(alpha_AM$forest_types, ref = "NR")
+mod_restoration <- lmer(Richness ~ forest_types + season + (1 | Plot_ID),data = alpha_AM)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+#### Shannon
+
+##### Total fungi
+
+Does restoration improve Shannon diversity?
+
+```{r}
+alpha_total$restoration <- relevel(alpha_total$restoration, ref = "Monoculture")
+shapiro.test(alpha_total$Shannon)
+mod_restoration <- lmer(Shannon ~ restoration + season + (1 | Plot_ID),data = alpha_total)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Does restoration improve Shannon diversity?
+
+```{r}
+alpha_total$restoration <- relevel(alpha_total$restoration, ref = "Reference")
+mod_restoration <- lmer(Shannon ~ restoration + season + (1 | Plot_ID),data = alpha_total)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Are restoration strategies different? (forest types)
+
+```{r}
+alpha_total$forest_types <- factor(alpha_total$forest_types)
+alpha_total$forest_types <- relevel(alpha_total$forest_types, ref = "NR")
+mod_restoration <- lmer(Shannon ~ forest_types + season + (1 | Plot_ID),data = alpha_total)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+##### AM fungi
+
+Does restoration improve Shannon diversity?
+
+```{r}
+alpha_AM$restoration <- relevel(alpha_AM$restoration, ref = "Monoculture")
+shapiro.test(alpha_AM$Shannon)
+mod_restoration <- lmer(Shannon ~ restoration + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Does restored forest level rainforest condition?
+
+```{r}
+alpha_AM$restoration <- relevel(alpha_AM$restoration, ref = "Reference")
+mod_restoration <- lmer(Shannon ~ restoration + season + (1 | Plot_ID),data = alpha_AM)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Are restoration strategies different? (forest types)
+
+```{r}
+alpha_AM$forest_types <- factor(alpha_AM$forest_types)
+alpha_AM$forest_types <- relevel(alpha_AM$forest_types, ref = "NR")
+mod_restoration <- lmer(Shannon ~ forest_types + season + (1 | Plot_ID),data = alpha_AM)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+#### Phylogenetic diversity
+
+##### Total fungi
+
+Does restoration improve Phylogenetic Diversity (PD)?
+
+```{r}
+alpha_total$restoration <- relevel(alpha_total$restoration, ref = "Monoculture")
+shapiro.test(alpha_total$PD)
+mod_restoration <- lmer(PD ~ restoration + season + (1 | Plot_ID),data = alpha_total)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Does restored forest level rainforest condition?
+
+```{r}
+alpha_total$restoration <- relevel(alpha_total$restoration, ref = "Reference")
+mod_restoration <- lmer(PD ~ restoration + season + (1 | Plot_ID),data = alpha_total)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Are restoration strategies different? (forest types)
+
+```{r}
+alpha_total$forest_types <- factor(alpha_total$forest_types)
+alpha_total$forest_types <- relevel(alpha_total$forest_types, ref = "NR")
+mod_restoration <- lmer(PD ~ forest_types + season + (1 | Plot_ID),data = alpha_total)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+##### AM fungi
+
+Does restoration improve Phylogenetic Diversity (PD)?
+
+```{r}
+alpha_AM$restoration <- relevel(alpha_AM$restoration, ref = "Monoculture")
+shapiro.test(alpha_AM$PD)
+mod_restoration <- lmer(PD ~ restoration + season + (1 | Plot_ID),data = alpha_AM)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Does restored forest level rainforest condition?
+
+```{r}
+alpha_AM$restoration <- relevel(alpha_AM$restoration, ref = "Reference")
+mod_restoration <- lmer(PD ~ restoration + season + (1 | Plot_ID),data = alpha_AM)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+Are restoration strategies different? (forest types)
+
+```{r}
+alpha_AM$forest_types <- factor(alpha_AM$forest_types)
+alpha_AM$forest_types <- relevel(alpha_AM$forest_types, ref = "NR")
+mod_restoration <- lmer(PD ~ forest_types + season + (1 | Plot_ID),data = alpha_AM)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+# Community composition
+
+## Total fungi
+
+### Taxonomic composition
+
+```{r}
+total_rel_abundance_t <- t(total_rel_abundance)
+bray_dist_total <- vegdist(total_rel_abundance_t, method = "bray")
+bray_mat <- as.matrix(bray_dist_total)
+total_var <- sum(bray_mat^2) / nrow(bray_mat)
+total_var
+
+# PCoA
+bray_pcoa_total <- cmdscale(bray_dist_total, eig = TRUE, k = 2)
+
+# PCoA data frame
+pcoa_bray_df <- data.frame(Sample = rownames(bray_pcoa_total$points), PCoA1 = bray_pcoa_total$points[, 1], PCoA2 = bray_pcoa_total$points[, 2], forest_type = env_var$forest_type, season = env_var$season, facet = "Total fungi taxonomic composition")
+
+# Variance explained
+var_exp_bray1 <- round(bray_pcoa_total$eig[1] / sum(bray_pcoa_total$eig) * 100, 1)
+var_exp_bray2 <- round(bray_pcoa_total$eig[2] / sum(bray_pcoa_total$eig) * 100, 1)
+
+# Factor levels
+pcoa_bray_df$forest_type <- factor(pcoa_bray_df$forest_type, levels = c("RM", "NR", "RP", "MF"))
+pcoa_bray_df$season <- factor(pcoa_bray_df$season, levels = c("Dry", "Wet"))
+
+# Define common color and shape scales
+common_colors <- c("RM"= "cyan4", "NR" = "chartreuse3", "RP"= "#7db53eff", "MF" = "forestgreen")
+common_shapes <- c("Dry" = 16, "Wet" = 17)
+
+species_composition_total <- ggplot(pcoa_bray_df, aes(x=PCoA1, y=PCoA2, colour=forest_type, shape=season)) + geom_point(size=5, stroke=1) + geom_vline(xintercept=0, linetype="dashed", color="grey50") + geom_hline(yintercept=0, linetype="dashed", color="grey50") + xlab(paste0("PCoA1 (", var_exp_bray1, "%)")) + ylab(paste0("PCoA2 (", var_exp_bray2, "%)")) + scale_colour_manual(values=common_colors) + scale_shape_manual(values=c(16,17)) + facet_wrap(~facet) + labs(colour="Forest type", shape="Season") + guides(colour=guide_legend(order=1), shape=guide_legend(order=2, override.aes=list(colour="grey60", size=3))) + theme_pubr(border=TRUE) + theme(axis.title=element_text(size=12, face="plain"), strip.background=element_rect(fill="grey20"), strip.text=element_text(color="white", size=14), legend.position=c(0.15,0.25), legend.direction="vertical", legend.key.size=unit(0.35,"cm"), legend.spacing.y=unit(0.15,"cm"), legend.text=element_text(size=8), legend.title=element_text(size=10, face="bold", margin=margin(b=1)), legend.box.margin=margin(2,2,2,2)) + annotate("text", x=-0.1, y=-0.2, size=3.2, label="Monoculture") + annotate("text", x=0.13, y=0.1, size=3.2, label="Restored forests") + annotate("text", x=-0.2, y=0.15, size=3.2, label="Rainforest")
+species_composition_total
+```
+
+### Phylogenetic composition
+
+```{r}
+# Weighted UniFrac distance
+wunifrac_dist <- picante::unifrac(total_rel_abundance_t, total_tree)
+# Define common color and shape scales
+common_colors <- c("RM"= "cyan4", "NR" = "chartreuse3", "RP"= "#7db53eff", "MF" = "forestgreen")
+common_shapes <- c("Dry" = 16, "Wet" = 17)
+# PCoA
+pcoa_w <- cmdscale(wunifrac_dist, eig = TRUE, k = 2)
+# Create PCoA dataframe
+pcoa_wunifrac_df <- data.frame(Sample=rownames(total_rel_abundance_t), PCoA1=pcoa_w$points[,1], PCoA2=pcoa_w$points[,2], forest_type=env_var$forest_type, season=env_var$season, facet="Total fungi phylogenetic composition")
+# Percentage variance explained
+var_exp_w1 <- round(pcoa_w$eig[1] / sum(pcoa_w$eig) * 100, 1)
+var_exp_w2 <- round(pcoa_w$eig[2] / sum(pcoa_w$eig) * 100, 1)
+# Plot Weighted UniFrac PCoA
+pcoa_wunifrac_df$forest_type <- factor(pcoa_wunifrac_df$forest_type, levels = c("RM", "NR", "RP", "MF"))
+pcoa_wunifrac_df$season <- factor(pcoa_wunifrac_df$season, levels = c("Dry", "Wet"))
+# phylogenetic_composition (fixed)
+phylogenetic_composition <- ggplot(pcoa_wunifrac_df, aes(x=PCoA1, y=PCoA2, colour=forest_type, shape=season)) + geom_point(size=5, stroke=1) + geom_vline(xintercept=0, linetype="dashed", color="grey50") + geom_hline(yintercept=0, linetype="dashed", color="grey50") + xlab(paste0("PCoA1 (", var_exp_w1, "%)")) + ylab(paste0("PCoA2 (", var_exp_w2, "%)")) + scale_colour_manual(values=common_colors) + scale_shape_manual(values=common_shapes) + facet_wrap(~facet) + labs(colour="Forest type", shape="Season") + guides(colour=guide_legend(order=1), shape=guide_legend(order=2, override.aes=list(colour="grey60", size=3))) + theme_pubr(border=TRUE) + theme(axis.title=element_text(size=12, face="plain"), strip.background=element_rect(fill="grey20"), strip.text=element_text(color="white", size=14), legend.position=c(0.15,0.25), legend.direction="vertical", legend.key.size=unit(0.35,"cm"), legend.spacing.y=unit(0.15,"cm"), legend.text=element_text(size=8), legend.title=element_text(size=10, face="bold", margin=margin(b=1)), legend.box.margin=margin(2,2,2,2)) + annotate("text", x=0.1, y=-0.18, size=3.2, label="Monoculture") + annotate("text", x=0.1, y=0.12, size=3.2, label="Restored forests") + annotate("text", x=-0.28, y=0.05, size=3.2, label="Rainforest")
+phylogenetic_composition
+```
+
+## AM fungi
+
+### Taxonomic composition
+
+```{r}
+AM_rel_abundance_t <- t(AM_rel_abundance_AM)
+# Bray-Curtis distance
+bray_dist_AM <- vegdist(AM_rel_abundance_t, method = "bray")
+# Convert distance to matrix
+bray_mat_AM <- as.matrix(bray_dist_AM)
+# Total variance (sum of squares)
+total_var <- sum(bray_mat_AM^2) / nrow(bray_mat_AM)
+# PCoA
+bray_pcoa_AM <- cmdscale(bray_dist_AM, eig = TRUE, k = 2)
+# PCoA data frame
+pcoa_bray_df_AM <- data.frame(Sample=rownames(bray_pcoa_AM$points), PCoA1=bray_pcoa_AM$points[,1], PCoA2=bray_pcoa_AM$points[,2], forest_type=env_var$forest_type, season=env_var$season, facet="AM fungi taxonomic composition")
+# Variance explained
+var_exp_bray1_AM <- round(bray_pcoa_AM$eig[1] / sum(bray_pcoa_AM$eig) * 100, 1)
+var_exp_bray2_AM <- round(bray_pcoa_AM$eig[2] / sum(bray_pcoa_AM$eig) * 100, 1)
+# Factor levels
+pcoa_bray_df_AM$forest_type <- factor(pcoa_bray_df$forest_type, levels = c("RM", "NR", "RP", "MF"))
+pcoa_bray_df_AM$season      <- factor(pcoa_bray_df$season, levels = c("Dry", "Wet"))
+species_composition_AM <- ggplot(pcoa_bray_df_AM, aes(x=PCoA1, y=PCoA2, colour=forest_type, shape=season)) + geom_point(size=5, stroke=1) + geom_vline(xintercept=0, linetype="dashed", color="grey50") + geom_hline(yintercept=0, linetype="dashed", color="grey50") + xlab(paste0("PCoA1 (", var_exp_bray1_AM, "%)")) + ylab(paste0("PCoA2 (", var_exp_bray2_AM, "%)")) + scale_colour_manual(values=common_colors) + scale_shape_manual(values=c(16,17)) + facet_wrap(~facet) + labs(colour="Forest type", shape="Season") + guides(colour=guide_legend(order=1), shape=guide_legend(order=2, override.aes=list(colour="grey60", size=3))) + theme_pubr(border=TRUE) + theme(axis.title=element_text(size=12, face="plain"), strip.background=element_rect(fill="grey20"), strip.text=element_text(color="white", size=14), legend.position=c(0.85,0.75), legend.direction="vertical", legend.key.size=unit(0.35,"cm"), legend.spacing.y=unit(0.15,"cm"), legend.text=element_text(size=8), legend.title=element_text(size=10, face="bold", margin=margin(b=1)), legend.box.margin=margin(2,2,2,2)) + annotate("text", x=-0.05, y=0.3, size=3.2, label="Monoculture") + annotate("text", x=-0.2, y=-0.05, size=3.2, label="Restored forests") + annotate("text", x=0.4, y=-0.11, size=3.2, label="Rainforest")
+species_composition_AM
+```
+
+### Phylogenetic composition
+
+```{r}
+# Weighted UniFrac distance
+wunifrac_dist_AM <- picante::unifrac(AM_rel_abundance_t, AM_tree)
+# PCoA
+pcoa_w_AM <- cmdscale(wunifrac_dist_AM, eig = TRUE, k = 2)
+# Create PCoA dataframe
+pcoa_wunifrac_df_AM <- data.frame(Sample=rownames(AM_rel_abundance_t), PCoA1=pcoa_w_AM$points[,1], PCoA2=pcoa_w_AM$points[,2], forest_type=env_var$forest_type, season=env_var$season, facet="AM fungi phylogenetic composition")
+# Percentage variance explained
+var_exp_w1_AM <- round(pcoa_w_AM$eig[1] / sum(pcoa_w_AM$eig) * 100, 1)
+var_exp_w2_AM <- round(pcoa_w_AM$eig[2] / sum(pcoa_w_AM$eig) * 100, 1)
+# Plot Weighted UniFrac PCoA
+pcoa_wunifrac_df_AM$forest_type <- factor(pcoa_wunifrac_df_AM$forest_type, levels = c("RM", "NR", "RP", "MF"))
+pcoa_wunifrac_df_AM$season <- factor(pcoa_wunifrac_df_AM$season, levels = c("Dry", "Wet"))
+phylogenetic_composition_AM <- ggplot(pcoa_wunifrac_df_AM, aes(x=PCoA1, y=PCoA2, colour=forest_type, shape=season)) + geom_point(size=5, stroke=1) + geom_vline(xintercept=0, linetype="dashed", color="grey50") + geom_hline(yintercept=0, linetype="dashed", color="grey50") + xlab(paste0("PCoA1 (", var_exp_w1_AM, "%)")) + ylab(paste0("PCoA2 (", var_exp_w2_AM, "%)")) + scale_colour_manual(values=common_colors) + scale_shape_manual(values=common_shapes) + facet_wrap(~facet) + labs(colour="Forest type", shape="Season") + guides(colour=guide_legend(order=1), shape=guide_legend(order=2, override.aes=list(colour="grey60", size=3))) + theme_pubr(border=TRUE) + theme(axis.title=element_text(size=12, face="plain"), strip.background=element_rect(fill="grey20"), strip.text=element_text(color="white", size=14), legend.position=c(0.6,0.25), legend.direction="vertical", legend.key.size=unit(0.35,"cm"), legend.spacing.y=unit(0.15,"cm"), legend.text=element_text(size=8), legend.title=element_text(size=10, face="bold", margin=margin(b=1)), legend.box.margin=margin(2,2,2,2)) + annotate("text", x=0, y=0.15, size=3.2, label="Monoculture") + annotate("text", x=-0.2, y=0.12, size=3.2, label="Restored forests") + annotate("text", x=0.25, y=-0.05, size=3.2, label="Rainforest")
+phylogenetic_composition_AM
+```
+
+## Effect of restoration on community composition
+
+### Total fungi
+
+#### Taxonomic composition
+
+```{r}
+coords <- location[, c("Longitude", "Latitude")]
+coords$Longitude <- as.numeric(coords$Longitude)
+coords$Latitude  <- as.numeric(coords$Latitude)
+# Distance matrix
+coord_dist <- dist(coords)
+# PCNM computation
+pcnm_obj  <- pcnm(coord_dist)
+pcnm_vars <- as.data.frame(pcnm_obj$vectors)
+sig_pcnm <- data.frame(PCNM = colnames(pcnm_vars), pvalue = NA)
+
+for (i in seq_len(ncol(pcnm_vars))) {
+  tmp_df <- data.frame(pcnm = pcnm_vars[, i])
+  test_i <- adonis2(vegdist(total_rel_abundance_t, "bray") ~ pcnm,
+                    data = tmp_df, permutations = 9999)
+  sig_pcnm$pvalue[i] <- test_i$`Pr(>F)`[1]
+}
+
+# Keep PCNMs with p < 0.05
+selected_pcnm <- which(sig_pcnm$pvalue < 0.05)
+pcnm_selected <- pcnm_vars[, selected_pcnm, drop = FALSE]
+env_pcnm <- cbind(env_var, pcnm_selected)
+# Set permutation block
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+# PERMANOVA with marginal (Type III-like) test
+adonis_res <- adonis2(bray_dist_total ~ restoration + season + PCNM1 + PCNM2 + PCNM3 + PCNM4, data=env_pcnm, permutations=999, strata=env_pcnm$Plot_ID, by="margin")
+adonis_res
+# Tests if group dispersions are equal
+disp <- betadisper(bray_dist_total, env_pcnm$restoration)
+anova(disp)   
+# Define restoration levels
+rest_levels <- unique(env_pcnm$restoration)
+# Get all pairwise combinations
+pairs <- combn(rest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+bray_mat <- as.matrix(bray_dist_total)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$restoration %in% p
+  dist_subset <- bray_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ restoration + season + PCNM1 + PCNM2 + PCNM3 + PCNM4,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+```{r}
+# Define forest levels
+forest_levels <- unique(env_pcnm$forest_types)
+# Get all pairwise combinations
+pairs <- combn(forest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+bray_mat <- as.matrix(bray_dist_total)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$forest_types %in% p
+  dist_subset <- bray_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ forest_types + season + PCNM1 + PCNM2 + PCNM3 + PCNM4,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+#### Phylogenetic composition
+
+```{r}
+coords <- location[, c("Longitude", "Latitude")]
+coords$Longitude <- as.numeric(coords$Longitude)
+coords$Latitude  <- as.numeric(coords$Latitude)
+# Distance matrix
+coord_dist <- dist(coords)
+# PCNM computation
+pcnm_obj  <- pcnm(coord_dist)
+pcnm_vars <- as.data.frame(pcnm_obj$vectors)
+sig_pcnm <- data.frame(PCNM = colnames(pcnm_vars), pvalue = NA)
+# Weighted UniFrac distance
+wunifrac_dist <- picante::unifrac(total_rel_abundance_t, total_tree)
+
+for (i in seq_len(ncol(pcnm_vars))) {
+  tmp_df <- data.frame(pcnm = pcnm_vars[, i])
+  test_i <- adonis2(wunifrac_dist ~ pcnm,
+                    data = tmp_df, permutations = 9999)
+  sig_pcnm$pvalue[i] <- test_i$`Pr(>F)`[1]
+}
+
+# Keep PCNMs with p < 0.05
+selected_pcnm <- which(sig_pcnm$pvalue < 0.05)
+pcnm_selected <- pcnm_vars[, selected_pcnm, drop = FALSE]
+env_pcnm <- cbind(env_var, pcnm_selected)
+
+# Set permutation block
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+# PERMANOVA with marginal (Type III-like) test
+adonis_res <- adonis2(wunifrac_dist ~ restoration + season + PCNM1 + PCNM2 + PCNM3 + PCNM4, data=env_pcnm, permutations=999, strata=env_pcnm$Plot_ID, by="margin")
+adonis_res
+# Tests if group dispersions are equal
+disp <- betadisper(wunifrac_dist, env_pcnm$restoration)
+anova(disp)   
+# Define restoration levels
+rest_levels <- unique(env_pcnm$restoration)
+# Get all pairwise combinations
+pairs <- combn(rest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+wunifrac_mat <- as.matrix(wunifrac_dist)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$restoration %in% p
+  dist_subset <- wunifrac_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ restoration + season + PCNM1 + PCNM2 + PCNM3 + PCNM4,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+```{r}
+# Define forest levels
+forest_levels <- unique(env_pcnm$forest_types)
+# Get all pairwise combinations
+pairs <- combn(forest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+wunifrac_mat <- as.matrix(wunifrac_dist)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$forest_types %in% p
+  dist_subset <- wunifrac_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ forest_types + season + PCNM1 + PCNM2 + PCNM3 + PCNM4,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+### AM fungi
+
+#### Taxonomic composition
+
+```{r}
+coords <- location[, c("Longitude", "Latitude")]
+coords$Longitude <- as.numeric(coords$Longitude)
+coords$Latitude  <- as.numeric(coords$Latitude)
+# Distance matrix
+coord_dist <- dist(coords)
+# PCNM computation
+pcnm_obj  <- pcnm(coord_dist)
+pcnm_vars <- as.data.frame(pcnm_obj$vectors)
+sig_pcnm <- data.frame(PCNM = colnames(pcnm_vars), pvalue = NA)
+
+for (i in seq_len(ncol(pcnm_vars))) {
+  tmp_df <- data.frame(pcnm = pcnm_vars[, i])
+  test_i <- adonis2(bray_dist_AM ~ pcnm,
+                    data = tmp_df, permutations = 9999)
+  sig_pcnm$pvalue[i] <- test_i$`Pr(>F)`[1]
+}
+
+# Keep PCNMs with p < 0.05
+selected_pcnm <- which(sig_pcnm$pvalue < 0.05)
+pcnm_selected <- pcnm_vars[, selected_pcnm, drop = FALSE]
+env_pcnm <- cbind(env_var, pcnm_selected)
+# Set permutation block
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+# PERMANOVA with marginal (Type III-like) test
+adonis_res <- adonis2(bray_dist_AM ~ restoration + season + PCNM1 + PCNM2 + PCNM3 + PCNM4, data=env_pcnm, permutations=999, strata=env_pcnm$Plot_ID, by="margin")
+adonis_res
+# Tests if group dispersions are equal
+disp <- betadisper(bray_dist_AM, env_pcnm$restoration)
+anova(disp)   
+# Define restoration levels
+rest_levels <- unique(env_pcnm$restoration)
+# Get all pairwise combinations
+pairs <- combn(rest_levels, 2, simplify = FALSE)
+
+# Convert dist to square matrix
+bray_mat <- as.matrix(bray_dist_AM)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$restoration %in% p
+  dist_subset <- bray_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ restoration + season + PCNM1 + PCNM2 + PCNM3 + PCNM4,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+```{r}
+# Define forest levels
+forest_levels <- unique(env_pcnm$forest_types)
+# Get all pairwise combinations
+pairs <- combn(forest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+bray_mat <- as.matrix(bray_dist_AM)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$forest_types %in% p
+  dist_subset <- bray_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ forest_types + season + PCNM1 + PCNM2 + PCNM3 + PCNM4,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+#### Phylogenetic composition
+
+```{r}
+coords <- location[, c("Longitude", "Latitude")]
+coords$Longitude <- as.numeric(coords$Longitude)
+coords$Latitude  <- as.numeric(coords$Latitude)
+# Distance matrix
+coord_dist <- dist(coords)
+# PCNM computation
+pcnm_obj  <- pcnm(coord_dist)
+pcnm_vars <- as.data.frame(pcnm_obj$vectors)
+sig_pcnm <- data.frame(PCNM = colnames(pcnm_vars), pvalue = NA)
+
+for (i in seq_len(ncol(pcnm_vars))) {
+  tmp_df <- data.frame(pcnm = pcnm_vars[, i])
+  test_i <- adonis2(wunifrac_dist_AM ~ pcnm,
+                    data = tmp_df, permutations = 9999)
+  sig_pcnm$pvalue[i] <- test_i$`Pr(>F)`[1]
+}
+
+# Keep PCNMs with p < 0.05
+selected_pcnm <- which(sig_pcnm$pvalue < 0.05)
+pcnm_selected <- pcnm_vars[, selected_pcnm, drop = FALSE]
+
+env_pcnm <- cbind(env_var, pcnm_selected)
+
+# Set permutation block
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+
+# PERMANOVA with marginal (Type III-like) test
+adonis_res <- adonis2(wunifrac_dist_AM ~ restoration + season + PCNM1 + PCNM2 + PCNM3 + PCNM4, data=env_pcnm, permutations=999, strata=env_pcnm$Plot_ID, by="margin")
+adonis_res
+# tests if group dispersions are equal
+disp <- betadisper(wunifrac_dist_AM, env_pcnm$restoration)
+anova(disp)   
+# Define restoration levels
+rest_levels <- unique(env_pcnm$restoration)
+# Get all pairwise combinations
+pairs <- combn(rest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+unifrac_mat <- as.matrix(wunifrac_dist_AM)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$restoration %in% p
+  dist_subset <- unifrac_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ restoration + season + PCNM1 + PCNM2 + PCNM3 + PCNM4,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+```{r}
+# Define forest levels
+forest_levels <- unique(env_pcnm$forest_types)
+# Get all pairwise combinations
+pairs <- combn(forest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+wunifrac_mat <- as.matrix(wunifrac_dist_AM)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$forest_types %in% p
+  dist_subset <- wunifrac_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ forest_types + season + PCNM1 + PCNM2 + PCNM3 + PCNM4,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+# Functional groups relative abundance
+
+## Relative abundance
+
+```{r}
+trophic_mode <- read.csv("data/trophic_mode.csv",header = TRUE)
+
+trophic_mode$Forest <- factor (trophic_mode$Forest, levels = c("RM", "NR", "RP", "MF"))
+
+
+trophic_mode$Category <- factor(trophic_mode$Category, levels = c("Saprophytic fungi", "Symbiotic fungi", "Pathogenic fungi"))
+
+
+common_colors <- c("RM"= "cyan4", "NR" = "chartreuse3", "RP"= "#7db53eff", "MF" = "forestgreen")
+
+
+trophic_mode_plot <- ggplot(trophic_mode,
+       aes(x = Forest,
+           y = Relative_abundance,
+           fill = Forest)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA)+
+  geom_jitter(aes(shape = Season), width = 0.05, size = 1.5, alpha = 0.7) +
+  geom_vline(xintercept = 1.6, color = "grey50", linetype = "dashed") +
+  geom_vline(xintercept = 3.5, color = "grey50", linetype = "dashed") +
+  scale_fill_manual(values = common_colors)+
+  facet_wrap(~Category, scales = "free")+
+  theme_bw() +
+  labs(x = "Forest",
+       y = "Relative abundance (%)") +
+theme_pubr(border = TRUE, legend = "none")+
+  theme(strip.background = element_rect(fill = "grey20"), strip.text = element_text(size = 12, face = "plain", color = "white")) + annotate("text", x = 1, y = Inf, label = "Monoculture", vjust = 1.8, size = 3.2, fontface = "plain") + annotate("text", x = 2.5, y = Inf, label = "Restored forests", vjust = 1.8, size = 3.2, fontface = "plain") + annotate("text", x = 4, y = Inf, label = "Rainforest", vjust = 1.8, size = 3.2, fontface = "plain") + scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))
+
+trophic_mode_plot
+```
+
+```{r}
+saprotroph_category <- read.csv("data/saprotroph_category.csv",header = TRUE)
+
+saprotroph_category$Forest <- factor (saprotroph_category$Forest, levels = c("RM", "NR", "RP", "MF"))
+
+
+saprotroph_category$Category <- factor(saprotroph_category$Category, levels = c("Soil saprotroph", "Litter saprotroph", "Wood saprotroph"))
+
+
+common_colors <- c("RM"= "cyan4", "NR" = "chartreuse3", "RP"= "#7db53eff", "MF" = "forestgreen")
+
+
+saprotroph_plot <- ggplot(saprotroph_category,
+       aes(x = Forest,
+           y = Relative_abundance,
+           fill = Forest)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA)+
+  geom_jitter(aes(shape = Season), width = 0.05, size = 1.5, alpha = 0.7) +
+  geom_vline(xintercept = 1.6, color = "grey50", linetype = "dashed") +
+  geom_vline(xintercept = 3.5, color = "grey50", linetype = "dashed") +
+  scale_fill_manual(values = common_colors)+
+  facet_wrap(~Category, scales = "free")+
+  theme_bw() +
+  labs(x = "Forest",
+       y = "Relative abundance (%)") +
+theme_pubr(border = TRUE, legend = "none")+
+  theme(strip.background = element_rect(fill = "grey20"), strip.text = element_text(size = 12, face = "plain", color = "white")) + annotate("text", x = 1, y = Inf, label = "Monoculture", vjust = 1.8, size = 3.2, fontface = "plain") + annotate("text", x = 2.5, y = Inf, label = "Restored forests", vjust = 1.8, size = 3.2, fontface = "plain") + annotate("text", x = 4, y = Inf, label = "Rainforest", vjust = 1.8, size = 3.2, fontface = "plain") + scale_y_continuous(expand = expansion(mult = c(0.05, 0.15)))
+
+saprotroph_plot
+```
+
+## Composition
+
+```{r}
+# Read data
+saprotroph_composition <- read.csv("data/saprotroph_composition.csv",
+                                   row.names = 1,
+                                   header = TRUE)
+
+saprotroph_rel_abundance <- sweep(
+  saprotroph_composition,
+  2,
+  rep(34300, ncol(saprotroph_composition)),
+  FUN = "/"
+)
+
+saprotroph_rel_abundance_t <- t(saprotroph_rel_abundance)
+
+bray_dist_sapro <- vegdist(
+  saprotroph_rel_abundance_t,
+  method = "bray"
+)
+
+
+# Total variance
+bray_mat <- as.matrix(bray_dist_sapro)
+total_var <- sum(bray_mat^2) / nrow(bray_mat)
+total_var
+
+# PCoA
+bray_pcoa_sapro <- cmdscale(bray_dist_sapro,
+                            eig = TRUE,
+                            k = 2)
+
+# PCoA dataframe
+pcoa_bray_df <- data.frame(
+  Sample = rownames(bray_pcoa_sapro$points),
+  PCoA1 = bray_pcoa_sapro$points[,1],
+  PCoA2 = bray_pcoa_sapro$points[,2],
+  forest_type = env_var$forest_type,
+  season = env_var$season,
+  facet = "Saprophytic fungi"
+)
+
+# Factor levels
+pcoa_bray_df$forest_type <- factor(pcoa_bray_df$forest_type,
+                                   levels = c("RM", "NR", "RP", "MF"))
+pcoa_bray_df$season <- factor(pcoa_bray_df$season,
+                              levels = c("Dry", "Wet"))
+
+# Variance explained
+var_exp_bray1 <- round(bray_pcoa_sapro$eig[1] /
+                         sum(bray_pcoa_sapro$eig) * 100, 1)
+var_exp_bray2 <- round(bray_pcoa_sapro$eig[2] /
+                         sum(bray_pcoa_sapro$eig) * 100, 1)
+
+# Colors and shapes
+common_colors <- c("RM" = "cyan4",
+                   "NR" = "chartreuse3",
+                   "RP" = "#7db53eff",
+                   "MF" = "forestgreen")
+
+common_shapes <- c("Dry" = 16,
+                   "Wet" = 17)
+
+# Plot
+species_composition_sapro <- ggplot(
+  pcoa_bray_df,
+  aes(x = PCoA1,
+      y = PCoA2,
+      colour = forest_type,
+      shape = season)
+) +
+  geom_point(size = 5, stroke = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  xlab(paste0("PCoA1 (", var_exp_bray1, "%)")) +
+  ylab(paste0("PCoA2 (", var_exp_bray2, "%)")) +
+  scale_colour_manual(values = common_colors) +
+  scale_shape_manual(values = common_shapes) +
+  facet_wrap(~facet) +
+  labs(colour = "Forest type",
+       shape = "Season") +
+  guides(
+    colour = guide_legend(order = 1),
+    shape = guide_legend(
+      order = 2,
+      override.aes = list(colour = "grey60", size = 3)
+    )
+  ) +
+  theme_pubr(border = TRUE) +
+  theme(
+    axis.title = element_text(size = 12),
+    strip.background = element_rect(fill = "grey20"),
+    strip.text = element_text(color = "white", size = 14),
+    legend.position = c(0.85, 0.25),
+    legend.direction = "horizontal",
+    legend.key.size = unit(0.35, "cm"),
+    legend.spacing.y = unit(0.15, "cm"),
+    legend.text = element_text(size = 8),
+    legend.title = element_text(size = 10, face = "bold",
+                                margin = margin(b = 1)),
+    legend.box.margin = margin(2, 2, 2, 2)
+  ) +
+  annotate("text", x = 0.22, y = -0.2, size = 3.2,
+           label = "Monoculture") +
+  annotate("text", x = -0.13, y = 0.1, size = 3.2,
+           label = "Restored forests") +
+  annotate("text", x = 0.28, y = 0.2, size = 3.2,
+           label = "Rainforest")
+
+species_composition_sapro
+
+
+
+
+symbiotroph_composition <- read.csv("data/symbiotroph_composition.csv",
+                                    row.names = 1,
+                                    header = TRUE)
+
+symbiotroph_rel_abundance <- sweep(
+  symbiotroph_composition,
+  2,
+  rep(34300, ncol(symbiotroph_composition)),
+  FUN = "/"
+)
+
+symbiotroph_rel_abundance_t <- t(symbiotroph_rel_abundance)
+
+bray_dist_symbio <- vegdist(
+  symbiotroph_rel_abundance_t,
+  method = "bray"
+)
+
+# Total variance
+bray_mat <- as.matrix(bray_dist_symbio)
+total_var <- sum(bray_mat^2) / nrow(bray_mat)
+total_var
+
+# PCoA
+bray_pcoa_symbio <- cmdscale(bray_dist_symbio,
+                             eig = TRUE,
+                             k = 2)
+
+# PCoA dataframe
+pcoa_bray_df <- data.frame(
+  Sample = rownames(bray_pcoa_symbio$points),
+  PCoA1 = bray_pcoa_symbio$points[,1],
+  PCoA2 = bray_pcoa_symbio$points[,2],
+  forest_type = env_var$forest_type,
+  season = env_var$season,
+  facet = "Symbiotic fungi"
+)
+
+# Factor levels
+pcoa_bray_df$forest_type <- factor(pcoa_bray_df$forest_type,
+                                   levels = c("RM", "NR", "RP", "MF"))
+pcoa_bray_df$season <- factor(pcoa_bray_df$season,
+                              levels = c("Dry", "Wet"))
+
+# Variance explained
+var_exp_bray1 <- round(bray_pcoa_symbio$eig[1] /
+                         sum(bray_pcoa_symbio$eig) * 100, 1)
+var_exp_bray2 <- round(bray_pcoa_symbio$eig[2] /
+                         sum(bray_pcoa_symbio$eig) * 100, 1)
+
+# Colors and shapes
+common_colors <- c("RM" = "cyan4",
+                   "NR" = "chartreuse3",
+                   "RP" = "#7db53eff",
+                   "MF" = "forestgreen")
+
+common_shapes <- c("Dry" = 16,
+                   "Wet" = 17)
+
+# Plot
+species_composition_symbio <- ggplot(
+  pcoa_bray_df,
+  aes(x = PCoA1,
+      y = PCoA2,
+      colour = forest_type,
+      shape = season)
+) +
+  geom_point(size = 5, stroke = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  xlab(paste0("PCoA1 (", var_exp_bray1, "%)")) +
+  ylab(paste0("PCoA2 (", var_exp_bray2, "%)")) +
+  scale_colour_manual(values = common_colors) +
+  scale_shape_manual(values = common_shapes) +
+  facet_wrap(~facet) +
+  labs(colour = "Forest type",
+       shape = "Season") +
+  guides(
+    colour = guide_legend(order = 1),
+    shape = guide_legend(
+      order = 2,
+      override.aes = list(colour = "grey60", size = 3)
+    )
+  ) +
+  theme_pubr(border = TRUE) +
+  theme(
+    axis.title = element_text(size = 12),
+    strip.background = element_rect(fill = "grey20"),
+    strip.text = element_text(color = "white", size = 14),
+    legend.position = c(0.85, 0.25),
+    legend.direction = "horizontal",
+    legend.key.size = unit(0.35, "cm"),
+    legend.spacing.y = unit(0.15, "cm"),
+    legend.text = element_text(size = 8),
+    legend.title = element_text(size = 10, face = "bold",
+                                margin = margin(b = 1)),
+    legend.box.margin = margin(2, 2, 2, 2)
+  ) +
+  annotate("text", x = -0.22, y = -0.1, size = 3.2,
+           label = "Monoculture") +
+  annotate("text", x = 0.25, y =-0.15, size = 3.2,
+           label = "Restored forests") +
+  annotate("text", x = -0.13, y = 0.1, size = 3.2,
+           label = "Rainforest")
+
+species_composition_symbio
+
+# Read data
+pathotroph_composition <- read.csv("data/pathotroph_composition.csv",
+                                   row.names = 1,
+                                   header = TRUE)
+
+pathotroph_rel_abundance <- sweep(
+  pathotroph_composition,
+  2,
+  rep(34300, ncol(pathotroph_composition)),
+  FUN = "/"
+)
+
+pathotroph_rel_abundance_t <- t(pathotroph_rel_abundance)
+
+bray_dist_patho <- vegdist(
+  pathotroph_rel_abundance_t,
+  method = "bray"
+)
+
+# Total variance
+bray_mat <- as.matrix(bray_dist_patho)
+total_var <- sum(bray_mat^2) / nrow(bray_mat)
+total_var
+
+# PCoA
+bray_pcoa_patho <- cmdscale(bray_dist_patho,
+                            eig = TRUE,
+                            k = 2)
+
+# PCoA dataframe
+pcoa_bray_df <- data.frame(
+  Sample = rownames(bray_pcoa_patho$points),
+  PCoA1 = bray_pcoa_patho$points[,1],
+  PCoA2 = bray_pcoa_patho$points[,2],
+  forest_type = env_var$forest_type,
+  season = env_var$season,
+  facet = "Pathogenic fungi"
+)
+
+# Factor levels
+pcoa_bray_df$forest_type <- factor(pcoa_bray_df$forest_type,
+                                   levels = c("RM", "NR", "RP", "MF"))
+pcoa_bray_df$season <- factor(pcoa_bray_df$season,
+                              levels = c("Dry", "Wet"))
+
+# Variance explained
+var_exp_bray1 <- round(bray_pcoa_patho$eig[1] /
+                         sum(bray_pcoa_patho$eig) * 100, 1)
+var_exp_bray2 <- round(bray_pcoa_patho$eig[2] /
+                         sum(bray_pcoa_patho$eig) * 100, 1)
+
+# Colors and shapes
+common_colors <- c("RM" = "cyan4",
+                   "NR" = "chartreuse3",
+                   "RP" = "#7db53eff",
+                   "MF" = "forestgreen")
+
+common_shapes <- c("Dry" = 16,
+                   "Wet" = 17)
+
+# Plot
+species_composition_patho <- ggplot(
+  pcoa_bray_df,
+  aes(x = PCoA1,
+      y = PCoA2,
+      colour = forest_type,
+      shape = season)
+) +
+  geom_point(size = 5, stroke = 1) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
+  xlab(paste0("PCoA1 (", var_exp_bray1, "%)")) +
+  ylab(paste0("PCoA2 (", var_exp_bray2, "%)")) +
+  scale_colour_manual(values = common_colors) +
+  scale_shape_manual(values = common_shapes) +
+  facet_wrap(~facet) +
+  labs(colour = "Forest type",
+       shape = "Season") +
+  guides(
+    colour = guide_legend(order = 1),
+    shape = guide_legend(
+      order = 2,
+      override.aes = list(colour = "grey60", size = 3)
+    )
+  ) +
+  theme_pubr(border = TRUE) +
+  theme(
+    axis.title = element_text(size = 12),
+    strip.background = element_rect(fill = "grey20"),
+    strip.text = element_text(color = "white", size = 14),
+    legend.position = c(0.15, 0.25),
+    legend.direction = "horizontal",
+    legend.key.size = unit(0.35, "cm"),
+    legend.spacing.y = unit(0.15, "cm"),
+    legend.text = element_text(size = 8),
+    legend.title = element_text(size = 10, face = "bold",
+                                margin = margin(b = 1)),
+    legend.box.margin = margin(2, 2, 2, 2)
+  ) +
+  annotate("text", x = 0.1, y = -0.24, size = 3.2,
+           label = "Monoculture") +
+  annotate("text", x = 0.1, y = 0.2, size = 3.2,
+           label = "Restored forests") +
+  annotate("text", x = -0.4, y = 0.1, size = 3.2,
+           label = "Rainforest")
+
+species_composition_patho
+```
+
+## Effect of restoration on fungal functional group relative abundance
+
+### Saprotrophs
+
+Does restoration enhance relative abundance?
+
+```{r}
+# Extract only Saprophytic fungi
+saprotroph <- trophic_mode[trophic_mode$Category == "Saprophytic fungi", ]
+
+# To do the same for pathotrophs (adjusting the name to match your exact data)
+pathotroph <- trophic_mode[trophic_mode$Category == "Pathogenic fungi", ]
+
+symbiotroph <- trophic_mode[trophic_mode$Category == "Symbiotic fungi", ]
+
+# Set reference level for restoration
+saprotroph$restoration <- relevel(factor(saprotroph$restoration), ref = "Monoculture")
+# Check normality of the response variable
+shapiro.test(saprotroph$Relative_abundance)
+# Fit linear mixed-effects model
+mod_restoration <- lmer(Relative_abundance ~ restoration + Season + (1 | Plot), data = saprotroph)
+# Model summary
+summary(mod_restoration)
+# Type III ANOVA for fixed effects
+anova(mod_restoration, type = 3)
+```
+
+Does restoration level rainforest condition?
+
+```{r}
+#### Restored vs Reference
+# Set reference level for restoration
+saprotroph$restoration <- relevel(factor(saprotroph$restoration), ref = "Rainforest")
+# Check normality of the response variable
+shapiro.test(saprotroph$Relative_abundance)
+# Fit linear mixed-effects model
+mod_restoration <- lmer(Relative_abundance ~ restoration + Season + (1 | Plot), data = saprotroph)
+# Model summary
+summary(mod_restoration)
+# Type III ANOVA for fixed effects
+anova(mod_restoration, type = 3)
+```
+
+Are restoration strategies different?
+
+```{r}
+# Are restoration strategies different?
+saprotroph$Forest <- factor(saprotroph$Forest)
+saprotroph$Forest <- relevel(saprotroph$Forest, ref = "NR")
+mod_restoration <- lmer(Relative_abundance ~ Forest + Season + (1 | Plot),data = saprotroph)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+### Symbiotrophs
+
+Does restoration enhance relative abundance?
+
+```{r}
+# 1. Extract only Symbiotic fungi
+symbiotroph <- trophic_mode[trophic_mode$Category == "Symbiotic fungi", ]
+
+# 2. Set reference level for restoration
+symbiotroph$restoration <- relevel(factor(symbiotroph$restoration), ref = "Monoculture")
+
+# 3. Check normality of the response variable
+shapiro.test(symbiotroph$Relative_abundance)
+
+# 4. Fit linear mixed-effects model
+mod_restoration_sym <- lmer(sqrt(Relative_abundance) ~ restoration + Season + (1 | Plot), data = symbiotroph)
+
+sym_resids <- residuals(mod_restoration_sym)
+shapiro.test(sym_resids)
+
+# 5. Model summary
+summary(mod_restoration_sym)
+
+# 6. Type III ANOVA for fixed effects
+anova(mod_restoration_sym, type = 3)
+```
+
+Does restoration level rainforest condition?
+
+```{r}
+# 1. Extract only Symbiotic fungi
+symbiotroph <- trophic_mode[trophic_mode$Category == "Symbiotic fungi", ]
+
+# 2. Set reference level for restoration to Rainforest
+symbiotroph$restoration <- relevel(factor(symbiotroph$restoration), ref = "Rainforest")
+
+# 3. Check normality of the response variable
+# Correct Syntax
+shapiro.test(sqrt(symbiotroph$Relative_abundance))
+
+# 4. Fit linear mixed-effects model
+mod_restoration_sym <- lmer(sqrt(Relative_abundance) ~ restoration + Season + (1 | Plot), data = symbiotroph)
+
+
+sym_resids <- residuals(mod_restoration_sym)
+shapiro.test(sym_resids)
+
+# 5. Model summary
+summary(mod_restoration_sym)
+
+# 6. Type III ANOVA for fixed effects
+anova(mod_restoration_sym, type = 3)
+
+```
+
+Are restoration strategies different?
+
+```{r}
+# Set Forest as a factor and change the reference level to NR
+symbiotroph$Forest <- factor(symbiotroph$Forest)
+symbiotroph$Forest <- relevel(symbiotroph$Forest, ref = "NR")
+
+# Fit the linear mixed-effects model
+mod_forest_sym <- lmer(sqrt(Relative_abundance) ~ Forest + Season + (1 | Plot), data = symbiotroph)
+
+# View model coefficients and t-tests
+summary(mod_forest_sym)
+
+# View Type III ANOVA table (F-test)
+anova(mod_forest_sym, type = 3)
+```
+
+### Pathotrophs
+
+Does restoration enhance relative abundance?
+
+```{r}
+# 1. Extract only Pathotrophic fungi
+pathotroph <- trophic_mode[trophic_mode$Category == "Pathogenic fungi", ]
+
+# 2. Set reference level for restoration
+pathotroph$restoration <- relevel(factor(pathotroph$restoration), ref = "Monoculture")
+
+# 3. Check normality of the response variable
+shapiro.test(pathotroph$Relative_abundance)
+
+# 4. Fit linear mixed-effects model
+mod_restoration_path <- lmer(sqrt(Relative_abundance) ~ restoration + Season + (1 | Plot), data = pathotroph)
+
+# 5. Model summary
+summary(mod_restoration_path)
+
+# 6. Type III ANOVA for fixed effects
+anova(mod_restoration_path, type = 3)
+```
+
+Does restoration level rainforest condition?
+
+```{r}
+
+# 2. Set reference level for restoration to Rainforest
+pathotroph$restoration <- relevel(factor(pathotroph$restoration), ref = "Rainforest")
+
+
+# 4. Fit linear mixed-effects model
+mod_restoration_path <- lmer(sqrt(Relative_abundance) ~ restoration + Season + (1 | Plot), data = pathotroph)
+
+# 5. Model summary
+summary(mod_restoration_path)
+
+# 6. Type III ANOVA for fixed effects
+anova(mod_restoration_path, type = 3)
+```
+
+Are restoration strategies different?
+
+```{r}
+# Set Forest as a factor and change the reference level to NR
+pathotroph$Forest <- factor(pathotroph$Forest)
+pathotroph$Forest <- relevel(pathotroph$Forest, ref = "NR")
+
+# Fit the linear mixed-effects model
+mod_forest_path <- lmer(sqrt(Relative_abundance) ~ Forest + Season + (1 | Plot), data = pathotroph)
+
+# View model coefficients and t-tests
+summary(mod_forest_path)
+
+# View Type III ANOVA table (F-test)
+anova(mod_forest_path, type = 3)
+```
+
+### Saprotroph categories
+
+```{r}
+saprotroph_category <- read.csv("data/saprotroph_category.csv",header = TRUE)
+
+litter_saprotroph <- trophic_mode[saprotroph_category$Category == "Litter saprotroph", ]
+soil_saprotroph <- trophic_mode[saprotroph_category$Category == "Soil saprotroph", ]
+wood_saprotroph <- trophic_mode[saprotroph_category$Category == "Wood saprotroph", ]
+
+```
+
+```{r}
+# Restored forest vs monoculture
+# Set reference level for restoration
+litter_saprotroph$restoration <- relevel(factor(litter_saprotroph$restoration), ref = "Monoculture")
+# Check normality of the response variable
+shapiro.test(litter_saprotroph$Relative_abundance)
+# Fit linear mixed-effects model
+mod_restoration <- lmer(Relative_abundance ~ restoration + Season + (1 | Plot), data = litter_saprotroph)
+# Model summary
+summary(mod_restoration)
+# Type III ANOVA for fixed effects
+anova(mod_restoration, type = 3)
+
+```
+
+```{r}
+# Set reference level for restoration
+soil_saprotroph$restoration <- relevel(factor(soil_saprotroph$restoration), ref = "Monoculture")
+
+# Check normality of the response variable
+shapiro.test(soil_saprotroph$Relative_abundance)
+
+# Fit linear mixed-effects model
+mod_restoration <- lmer(Relative_abundance ~ restoration + Season + (1 | Plot),
+                        data = soil_saprotroph)
+
+# Model summary
+summary(mod_restoration)
+
+# Type III ANOVA for fixed effects
+anova(mod_restoration, type = 3)
+
+
+#### Restored vs Reference
+# Set reference level for restoration
+soil_saprotroph$restoration <- relevel(factor(soil_saprotroph$restoration), ref = "Rainforest")
+# Check normality of the response variable
+shapiro.test(soil_saprotroph$Relative_abundance)
+# Fit linear mixed-effects model
+mod_restoration <- lmer(Relative_abundance ~ restoration + Season + (1 | Plot), data = soil_saprotroph)
+# Model summary
+summary(mod_restoration)
+# Type III ANOVA for fixed effects
+anova(mod_restoration, type = 3)
+
+# Are restoration strategies different?
+soil_saprotroph$Forest <- factor(soil_saprotroph$Forest)
+soil_saprotroph$Forest <- relevel(soil_saprotroph$Forest, ref = "NR")
+mod_restoration <- lmer(Relative_abundance ~ Forest + Season + (1 | Plot),data = soil_saprotroph)
+summary(mod_restoration)
+anova(mod_restoration, type = 3)
+```
+
+```{r}
+
+# Set reference level for restoration
+wood_saprotroph$restoration <- relevel(factor(wood_saprotroph$restoration), ref = "Monoculture")
+
+# Check normality of the response variable
+shapiro.test(wood_saprotroph$Relative_abundance)
+
+# Fit linear mixed-effects model
+mod_restoration <- lmer(Relative_abundance ~ restoration + Season + (1 | Plot),
+                        data = wood_saprotroph)
+
+# Model summary
+summary(mod_restoration)
+
+# Type III ANOVA for fixed effects
+anova(mod_restoration, type = 3)
+
+
+# Restored vs Reference
+
+# Set reference level for restoration
+wood_saprotroph$restoration <- relevel(factor(wood_saprotroph$restoration), ref = "Rainforest")
+
+# Check normality of the response variable
+shapiro.test(wood_saprotroph$Relative_abundance)
+
+# Fit linear mixed-effects model
+mod_restoration <- lmer(sqrt(Relative_abundance) ~ restoration + Season + (1 | Plot),
+                        data = wood_saprotroph)
+
+# Model summary
+summary(mod_restoration)
+
+# Type III ANOVA for fixed effects
+anova(mod_restoration, type = 3)
+
+
+# Are restoration strategies different?
+
+wood_saprotroph$Forest <- factor(wood_saprotroph$Forest)
+wood_saprotroph$Forest <- relevel(wood_saprotroph$Forest, ref = "NR")
+
+mod_restoration <- lmer(Relative_abundance ~ Forest + Season + (1 | Plot),
+                        data = wood_saprotroph)
+
+summary(mod_restoration)
+
+anova(mod_restoration, type = 3)
+```
+
+```{r}
+# Restored vs Reference
+
+# Set reference level for restoration
+litter_saprotroph$restoration <- relevel(factor(litter_saprotroph$restoration), ref = "Rainforest")
+
+# Check normality of the response variable
+shapiro.test(litter_saprotroph$Relative_abundance)
+
+# Fit linear mixed-effects model
+mod_restoration <- lmer(Relative_abundance ~ restoration + Season + (1 | Plot),
+                        data = litter_saprotroph)
+
+# Model summary
+summary(mod_restoration)
+
+# Type III ANOVA for fixed effects
+anova(mod_restoration, type = 3)
+
+
+# Are restoration strategies different?
+
+litter_saprotroph$Forest <- factor(litter_saprotroph$Forest)
+litter_saprotroph$Forest <- relevel(litter_saprotroph$Forest, ref = "NR")
+
+mod_restoration <- lmer(Relative_abundance ~ Forest + Season + (1 | Plot),
+                        data = litter_saprotroph)
+
+summary(mod_restoration)
+
+anova(mod_restoration, type = 3)
+```
+
+## Effect of restoration on fungal functional group composition
+
+### Saprotrophs
+
+```{r}
+coords <- location[, c("Longitude", "Latitude")]
+coords$Longitude <- as.numeric(coords$Longitude)
+coords$Latitude  <- as.numeric(coords$Latitude)
+# Distance matrix
+coord_dist <- dist(coords)
+# PCNM computation
+pcnm_obj  <- pcnm(coord_dist)
+pcnm_vars <- as.data.frame(pcnm_obj$vectors)
+sig_pcnm <- data.frame(PCNM = colnames(pcnm_vars), pvalue = NA)
+
+for (i in seq_len(ncol(pcnm_vars))) {
+  tmp_df <- data.frame(pcnm = pcnm_vars[, i])
+  test_i <- adonis2(vegdist(saprotroph_rel_abundance_t, "bray") ~ pcnm,
+                    data = tmp_df, permutations = 9999)
+  sig_pcnm$pvalue[i] <- test_i$`Pr(>F)`[1]
+}
+
+bray_dist_sapro <- vegdist(
+  saprotroph_rel_abundance_t,
+  method = "bray"
+)
+
+# Keep PCNMs with p < 0.05
+selected_pcnm <- which(sig_pcnm$pvalue < 0.05)
+pcnm_selected <- pcnm_vars[, selected_pcnm, drop = FALSE]
+env_pcnm <- cbind(env_var, pcnm_selected)
+# Set permutation block
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+# PERMANOVA with marginal (Type III-like) test
+adonis_res <- adonis2(bray_dist_sapro ~ restoration + season + PCNM1 + PCNM3, data=env_pcnm, permutations=999, strata=env_pcnm$Plot_ID, by="margin")
+adonis_res
+# Tests if group dispersions are equal
+disp <- betadisper(bray_dist_sapro, env_pcnm$restoration)
+anova(disp)   
+# Define restoration levels
+rest_levels <- unique(env_pcnm$restoration)
+# Get all pairwise combinations
+pairs <- combn(rest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+bray_mat <- as.matrix(bray_dist_sapro)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$restoration %in% p
+  dist_subset <- bray_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ restoration + season + PCNM1 + PCNM3,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+```{r}
+# Define forest levels
+forest_levels <- unique(env_pcnm$forest_types)
+# Get all pairwise combinations
+pairs <- combn(forest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+bray_mat <- as.matrix(bray_dist_sapro)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$forest_types %in% p
+  dist_subset <- bray_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ forest_types + season + PCNM1 + PCNM3,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+### Symbiotroph
+
+```{r}
+coords <- location[, c("Longitude", "Latitude")]
+coords$Longitude <- as.numeric(coords$Longitude)
+coords$Latitude  <- as.numeric(coords$Latitude)
+# Distance matrix
+coord_dist <- dist(coords)
+# PCNM computation
+pcnm_obj  <- pcnm(coord_dist)
+pcnm_vars <- as.data.frame(pcnm_obj$vectors)
+sig_pcnm <- data.frame(PCNM = colnames(pcnm_vars), pvalue = NA)
+
+for (i in seq_len(ncol(pcnm_vars))) {
+  tmp_df <- data.frame(pcnm = pcnm_vars[, i])
+  test_i <- adonis2(vegdist(symbiotroph_rel_abundance_t, "bray") ~ pcnm,
+                    data = tmp_df, permutations = 9999)
+  sig_pcnm$pvalue[i] <- test_i$`Pr(>F)`[1]
+}
+
+bray_dist_symbio <- vegdist(
+  symbiotroph_rel_abundance_t,
+  method = "bray"
+)
+
+# Keep PCNMs with p < 0.05
+selected_pcnm <- which(sig_pcnm$pvalue < 0.05)
+pcnm_selected <- pcnm_vars[, selected_pcnm, drop = FALSE]
+env_pcnm <- cbind(env_var, pcnm_selected)
+# Set permutation block
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+# PERMANOVA with marginal (Type III-like) test
+adonis_res <- adonis2(bray_dist_symbio ~ restoration + season + PCNM1 + PCNM3 + PCNM4, data=env_pcnm, permutations=999, strata=env_pcnm$Plot_ID, by="margin")
+adonis_res
+# Tests if group dispersions are equal
+disp <- betadisper(bray_dist_symbio, env_pcnm$restoration)
+anova(disp)   
+# Define restoration levels
+rest_levels <- unique(env_pcnm$restoration)
+# Get all pairwise combinations
+pairs <- combn(rest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+bray_mat <- as.matrix(bray_dist_symbio)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$restoration %in% p
+  dist_subset <- bray_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ restoration + season + PCNM1 + PCNM3 + PCNM4,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+```{r}
+# Define forest levels
+forest_levels <- unique(env_pcnm$forest_types)
+# Get all pairwise combinations
+pairs <- combn(forest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+bray_mat <- as.matrix(bray_dist_symbio)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$forest_types %in% p
+  dist_subset <- bray_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ forest_types + season + PCNM1 + PCNM3 +PCNM4,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+### Pathotroph
+
+```{r}
+coords <- location[, c("Longitude", "Latitude")]
+coords$Longitude <- as.numeric(coords$Longitude)
+coords$Latitude  <- as.numeric(coords$Latitude)
+# Distance matrix
+coord_dist <- dist(coords)
+# PCNM computation
+pcnm_obj  <- pcnm(coord_dist)
+pcnm_vars <- as.data.frame(pcnm_obj$vectors)
+sig_pcnm <- data.frame(PCNM = colnames(pcnm_vars), pvalue = NA)
+
+for (i in seq_len(ncol(pcnm_vars))) {
+  tmp_df <- data.frame(pcnm = pcnm_vars[, i])
+  test_i <- adonis2(vegdist(pathotroph_rel_abundance_t, "bray") ~ pcnm,
+                    data = tmp_df, permutations = 9999)
+  sig_pcnm$pvalue[i] <- test_i$`Pr(>F)`[1]
+}
+
+bray_dist_patho <- vegdist(
+  pathotroph_rel_abundance_t,
+  method = "bray"
+)
+
+# Keep PCNMs with p < 0.05
+selected_pcnm <- which(sig_pcnm$pvalue < 0.05)
+pcnm_selected <- pcnm_vars[, selected_pcnm, drop = FALSE]
+env_pcnm <- cbind(env_var, pcnm_selected)
+# Set permutation block
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+# PERMANOVA with marginal (Type III-like) test
+adonis_res <- adonis2(bray_dist_patho ~ restoration + season + PCNM1 + PCNM2 + PCNM3, data=env_pcnm, permutations=999, strata=env_pcnm$Plot_ID, by="margin")
+adonis_res
+# Tests if group dispersions are equal
+disp <- betadisper(bray_dist_patho, env_pcnm$restoration)
+anova(disp)   
+# Define restoration levels
+rest_levels <- unique(env_pcnm$restoration)
+# Get all pairwise combinations
+pairs <- combn(rest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+bray_mat <- as.matrix(bray_dist_patho)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$restoration %in% p
+  dist_subset <- bray_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ restoration + season + PCNM1 + PCNM2 + PCNM3,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+```{r}
+# Define forest levels
+forest_levels <- unique(env_pcnm$forest_types)
+# Get all pairwise combinations
+pairs <- combn(forest_levels, 2, simplify = FALSE)
+# Convert dist to square matrix
+bray_mat <- as.matrix(bray_dist_patho)
+
+for(p in pairs){
+  cat("\n=== Pairwise PERMANOVA:", p[1], "vs", p[2], "===\n")
+  
+  # Subset rows/columns for the two groups
+  idx <- env_pcnm$forest_types %in% p
+  dist_subset <- bray_mat[idx, idx]
+  meta_subset <- env_pcnm[idx, ]
+  
+  # Convert back to dist object
+  dist_subset <- as.dist(dist_subset)
+  
+  # PERMANOVA
+  res <- adonis2(
+    dist_subset ~ forest_types + season + PCNM1 + PCNM2 +PCNM3,
+    data = meta_subset,
+    permutations = 999,
+    strata = meta_subset$Plot_ID,
+    by = "margin"
+  )
+  
+  print(res)
+}
+```
+
+## Effect of soil abiotic properties
+
+### Alpha diversity
+
+#### Total fungi
+
+Do soil C, N, P and pH affect observed richness?
+
+```{r}
+set.seed(123)
+mod_soil_main <- lmer(Richness ~ TC + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)  # Type III ANOVA for fixed effects
+```
+
+```{r}
+mod_soil_main <- lmer(Richness ~ TN + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)  # Type III ANOVA for fixed effects
+```
+
+```{r}
+mod_soil_main <- lmer(Richness ~ TP + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)  # Type III ANOVA for fixed effects
+```
+
+```{r}
+mod_soil_main <- lmer(Richness ~ pH + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)  # Type III ANOVA for fixed effects
+```
+
+Do soil C, N, P and pH affect Shannon diversity?
+
+```{r}
+mod_soil_main <- lmer(Shannon ~ TC + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(Shannon ~ TN + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(Shannon ~ TP + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(Shannon ~ pH + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+Do soil C, N, P and pH affect PD?
+
+```{r}
+mod_soil_main <- lmer(PD ~ TC + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(PD ~ TN + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(PD ~ TP + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(PD ~ pH + forest_types + season + (1 | Plot_ID), data = alpha_total)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+#### AM fungi
+
+Do soil C, N, P and pH affect observed richness?
+
+```{r}
+set.seed(123)
+mod_soil_main <- lmer(Richness ~ TC + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)  # Type III ANOVA for fixed effects
+```
+
+```{r}
+mod_soil_main <- lmer(Richness ~ TN + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)  # Type III ANOVA for fixed effects
+```
+
+```{r}
+mod_soil_main <- lmer(Richness ~ TP + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)  # Type III ANOVA for fixed effects
+```
+
+```{r}
+mod_soil_main <- lmer(Richness ~ pH + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)  # Type III ANOVA for fixed effects
+```
+
+Do soil C, N, P and pH affect Shannon diversity?
+
+```{r}
+mod_soil_main <- lmer(Shannon ~ TC + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(Shannon ~ TN + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(Shannon ~ TP + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(Shannon ~ pH + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+Do soil C, N, P and pH affect PD?
+
+```{r}
+mod_soil_main <- lmer(PD ~ TC + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(PD ~ TN + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(PD ~ TP + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+```{r}
+mod_soil_main <- lmer(PD ~ pH + forest_types + season + (1 | Plot_ID), data = alpha_AM)
+summary(mod_soil_main)
+anova(mod_soil_main, type = 3)
+```
+
+## Composition
+
+### Total fungi
+
+#### Taxonomic composition
+
+```{r}
+set.seed(123)
+pdbRDA <- dbrda(bray_dist_total ~ TC + TN + TP + pH + Condition(forest_types + season + PCNM1 + PCNM2 + PCNM3),data = env_pcnm)
+summary(pdbRDA)
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+# Overall soil effect
+anova(pdbRDA, permutations = perm)
+anova(pdbRDA, by = "margin", permutations = perm)
+```
+
+#### Phylogenetic composition
+
+```{r}
+set.seed(123)
+pdbRDA <- dbrda(wunifrac_dist ~ TC + TN + TP + pH + Condition(forest_types + season + PCNM1 + PCNM2 + PCNM3), data = env_pcnm)
+summary(pdbRDA)
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+# Overall soil effect
+anova(pdbRDA, permutations = perm)
+anova(pdbRDA, by = "margin", permutations = perm)
+```
+
+### AM fungi
+
+#### Taxonomic composition
+
+```{r}
+set.seed(123)
+pdbRDA <- dbrda(bray_dist_AM ~ TC + TN + TP + pH + Condition(forest_types + season + PCNM1 + PCNM2 + PCNM3), data = env_pcnm)
+summary(pdbRDA)
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+# Overall soil effect
+anova(pdbRDA, permutations = perm)
+anova(pdbRDA, by = "margin", permutations = perm)
+```
+
+#### Phylogenetic composition
+
+```{r}
+set.seed(123)
+pdbRDA <- dbrda(wunifrac_dist_AM ~ TC + TN + TP + pH + Condition(forest_types + season + PCNM1 + PCNM2 + PCNM3),data = env_pcnm)
+summary(pdbRDA)
+perm <- how(nperm = 999)
+setBlocks(perm) <- env_pcnm$Plot_ID
+# Overall soil effect
+anova(pdbRDA, permutations = perm)
+anova(pdbRDA, by = "margin", permutations = perm)
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
